@@ -1,0 +1,256 @@
+---
+title: "Financial-Analysis"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: row
+    social: menu
+    source_code: embed
+    theme: lumen
+    vertical_layout: scroll
+    logo: india.png
+    favicon: t.png
+    
+    
+---
+
+```{r setup, include=FALSE,message=FALSE}
+library(flexdashboard)
+library(forecast)
+library(quantmod)
+library(dplyr)
+library(PerformanceAnalytics)
+library(rugarch)
+library(plotly)
+library(dygraphs)
+library(prophet)
+```
+
+
+```{r,results='hide',cache=TRUE}
+getSymbols("GS",from="2014-01-01",to="2020-09-10")
+```
+
+Data Table  {data-icon="fa-table"}
+=================================================
+
+Time Series Plot {data-width=600}
+------------------------------------------------
+
+### Time Series Plot
+
+```{r}
+GS$GS.Close %>% 
+  plot.xts(gsp,main="Goldman Sachs Inc.",
+           col="black",
+           bg = "pink")
+
+
+
+```
+
+
+### Data-Table
+
+```{r}
+GS %>% 
+  data.frame() %>% 
+  #tail(10)%>% 
+  DT::datatable(colnames = c("Date","Open","High","Low","Close","Volume","Adjusted"))
+```
+
+Interactive {.tabset data-width=400}
+--------------------------------------------------
+
+### Line
+
+```{r}
+library(dygraphs)
+
+final <- cbind(GS$GS.Open,GS$GS.High,GS$GS.Low,GS$GS.Close)
+dygraph(final,
+        main = "Goldman Sach Price Repersentation") %>% 
+  dySeries("GS.Open",label = "Open") %>%
+  dySeries("GS.High",label = "High") %>%
+  dySeries("GS.Low",label = "Low") %>%
+  dySeries("GS.Close",label = "Close") %>%
+  dyHighlight(highlightCircleSize = 3,highlightSeriesOpts = list(strokeWidth=3)) %>% 
+  dyEvent("2020-01-15",label = "COVID",labelLoc = 'bottom') %>% 
+  dyRangeSelector(fillColor = "violet",strokeColor = "pink",
+                  dateWindow = c("2020-08-25","2020-09-09"))
+
+
+```
+
+### CandleStick
+```{r}
+G <- GS[,c("GS.Open","GS.High","GS.Low","GS.Close")]
+colnames(G) <- c("Open","High","Low","Close")
+#G$a <- NULL
+#G$b <- NULL
+#G$c <- NULL
+
+dygraph(G) %>% 
+  dyCandlestick() %>%
+  dyRangeSelector(fillColor = "lightblue",
+                  dateWindow = c("2020-02-25","2020-09-09"))
+  
+
+
+```
+
+
+Modeling {data-icon="fa-line-chart"}
+===========================================================
+
+Theoretical Explanation {.sidebar}
+--------------------------------------------------------
+### Time-Series ARMA Modeling
+
+There are major assumption which \n assures good working of this model.
+
+
++ Stationary check:Weather Price hit \n it's mean price over the time or not.
++ Constant Conditional Variance over \n the period of time.
++ Error is normally distributed.
+
+DATA {data-height=100}
+----------------------------------------------------------
+
+### LAST PRICE
+```{r}
+library(flexdashboard)
+valueBox(tail(GS$GS.Close,1),
+         caption = "Last Prevail Price",color = "green",
+         icon="fa-subscript")
+   ##glue::glue("Price {lubridate::today()-1}")
+```
+
+### PREDICTED PRICE
+```{r}
+library(flexdashboard)
+valueBox(round(predict(auto.arima(GS$GS.Close),1)$pred,4),
+         caption = "Auto-Arima Prediction",color = "lightblue",
+         icon="fa-superscript")
+```
+
+### Standard Error 
+```{r}
+library(flexdashboard)
+valueBox(round(predict(auto.arima(GS$GS.Close),1)$se,4),
+         caption = "Error Assumed",color = "grey",
+         icon="fa-user-secret")
+```
+
+
+GRAPH {.tabset .tabset-fade data-height=900}
+----------------------------------------------------------
+### ARIMA
+```{r}
+library(lubridate)
+library(plotly)
+library(ggplot2)
+
+gsp <- GS$GS.Close
+auto <- forecast::auto.arima(gsp)
+df <- data.frame(yr=index(gsp),prc=gsp$GS.Close)
+colnames(df) <- c("yr","prc")
+
+at <- data.frame(yr=index(gsp),prc=auto$fitted)
+colnames(at) <- c("yr","prc")
+
+
+plotly::ggplotly(
+ggplot(data=df,aes(x=yr,y=prc))+
+  geom_line(col="blue")+
+  geom_line(data = at,aes(col="red"))+
+  #geom_label(data = df,x=as.Date("2020-09-09"),y= 202.22,label="Actual")+
+  #geom_label(data=at,x=as.Date("2020-09-09"),y=203.2799,label="Prediction")+
+  xlab("")+ylab("")+ggthemes::theme_pander()+theme(legend.position = 'none')
+)
+```
+
+### GARCH-GJR
+```{r}
+s <- ugarchspec(mean.model = list(armaOrder=c(1,1)),
+                variance.model = list(variance.model=list(model="gjrGARCH")),
+                distribution.model = "std"
+                )
+m <- ugarchfit(spec = s, data = GS$GS.Close)
+
+gdf <- data.frame(yr=index(GS),prc=m@fit$fitted.values)
+colnames(gdf) <- c("yr","prc")
+
+df <- data.frame(yr=index(gsp),prc=gsp$GS.Close)
+colnames(df) <- c("yr","prc")
+ggplotly(
+ggplot(data=gdf, aes(x=yr, y=prc))+
+  geom_line(col="blue")+
+  geom_line(data = df, col="darkgreen")+
+  xlab("")+ylab("")+ggthemes::theme_pander()+
+  theme()
+)
+```
+
+
+### PROPHET
+```{r cache=TRUE}
+library(prophet)
+m <- data.frame(ds=index(gsp),y=gsp$GS.Close)
+colnames(m) <- c("ds","y") #ds and y only work for prophet
+
+mm <- prophet(m,weekly.seasonality = F)
+future <- make_future_dataframe(mm,periods = 365)
+
+forc <- predict(mm,future)
+pp <- cbind(future,forc$yhat,forc$yhat_lower,forc$yhat_upper)
+
+colnames(pp) <- c("yr","prc","lw","up")
+
+pp <- as.xts(pp,order.by = pp$yr)
+dygraph(pp) %>% 
+  dySeries("yr",label = "Year") %>%
+  dySeries("prc",label = "Price") %>% 
+  dySeries("lw",label = "low") %>% 
+  dySeries("up",label = "Upper") %>%
+  #dySeries("close",label = "Actual") %>% 
+  dyOptions(colors = c("lightblue","green","lightblue")) %>% 
+  dyEvent("2020-09-09",label = "Prediction Start",labelLoc = "bottom") %>% 
+  dyEvent("2020-01-15",label = "Covid-19",labelLoc = "bottom")
+```
+
+
+### TABLE
+```{r}
+s_final <- ugarchspec(mean.model = list(armaOrder=c(1,1)),
+           variance.model = list(model="gjrGARCH",garchOrder=c(1,1),
+                                 submodel=arima(GS$GS.Close,order =                                                                   c(1,1,2))),
+           distribution.model = "sstd"
+          )
+
+f_model <- ugarchfit(spec = s_final,data = GS$GS.Close)
+
+setfixed(s_final) <- as.list(coef(f_model))
+
+# f2014 <- ugarchforecast(data=GS$GS.Close["2014"],
+#                         fitORspec = s_final,
+#                         n.ahead = 252)
+# f2021 <- ugarchforecast(data=GS$GS.Close["2020"],
+#                         fitORspec = s_final,
+#                         n.ahead = 252)
+# par(mfrow=c(2,1))
+# plot(sigma(f2014))
+# plot(sigma(f2020))
+
+
+path <- ugarchpath(spec = s_final,
+                   m.sim = 3,
+                   n.sim = 1*180,
+                   rseed = 123)
+#plot.zoo(fitted(path))
+
+path@path$seriesSim %>% 
+  as.data.frame() %>% 
+  DT::datatable()
+
+```
+
